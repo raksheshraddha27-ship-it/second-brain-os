@@ -1,0 +1,26 @@
+{
+  "PreToolUse": [
+    {
+      "matcher": "Write|Edit",
+      "hooks": [
+        {
+          "type": "prompt",
+          "prompt": "This project uses Second Brain OS. Read .secondbrain/config.json in the current working directory (if it does not exist, approve - no Second Brain is configured here). Find the `raw_folder` field. If the file path targeted by this tool call ($TOOL_INPUT) is inside `raw_folder`, block the operation: raw sources are immutable per the Second Brain OS schema (CLAUDE.md) - the agent must only read from that folder, never write, edit, rename, or delete its contents. If a new source needs to be added, it should be added as a new file by the user, then picked up by the `ingest` skill - never by editing an existing raw file. If the target path is not inside `raw_folder`, approve.",
+          "timeout": 20
+        }
+      ]
+    }
+  ],
+  "SessionStart": [
+    {
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/session-start-check.sh",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}

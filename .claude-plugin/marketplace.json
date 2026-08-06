@@ -1,0 +1,13 @@
+{
+  "name": "second-brain-os-dev",
+  "owner": {
+    "name": "Shraddha Rakshe"
+  },
+  "plugins": [
+    {
+      "name": "second-brain-os",
+      "source": ".",
+      "description": "Turn any folder of raw sources into a self-maintaining, LLM-curated knowledge wiki (Karpathy's LLM Wiki pattern)."
+    }
+  ]
+}

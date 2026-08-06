@@ -1,0 +1,9 @@
+{
+  "name": "second-brain-os",
+  "version": "0.1.0",
+  "description": "Turn any folder of raw sources (meeting recordings, PPTs, notes, articles) into a self-maintaining, LLM-curated knowledge wiki, based on Andrej Karpathy's LLM Wiki pattern.",
+  "author": {
+    "name": "Shraddha Rakshe"
+  },
+  "keywords": ["second-brain", "knowledge-base", "wiki", "llm-wiki", "karpathy", "personal-knowledge-management"]
+}
