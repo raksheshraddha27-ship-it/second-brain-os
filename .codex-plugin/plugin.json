@@ -1,0 +1,22 @@
+{
+  "name": "second-brain-os",
+  "version": "0.3.0",
+  "description": "Build and maintain a token-conscious personal knowledge wiki from immutable source files.",
+  "author": {
+    "name": "Shraddha Rakshe"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Second Brain OS",
+    "shortDescription": "Turn source files into a maintained knowledge wiki.",
+    "longDescription": "Create, ingest, query, lint, and review an interlinked Markdown knowledge wiki using token-conscious workflows.",
+    "developerName": "Shraddha Rakshe",
+    "category": "Productivity",
+    "capabilities": ["Knowledge management", "Local files", "Wiki maintenance"],
+    "defaultPrompt": [
+      "Set up a second brain in this project.",
+      "Sync my second brain.",
+      "What does my second brain know about this topic?"
+    ]
+  }
+}

@@ -1,45 +1,55 @@
 ---
 name: ingest
 description: >
-  This skill should be used when the user asks to "ingest this file", "add this source to my
-  wiki", "process raw/<filename>", or names a specific file in the raw folder to add to the
-  Second Brain. Also invoked internally by the `second-brain` orchestrator skill with exactly
-  one file path. Processes exactly one raw source per invocation — never more.
+  Ingest exactly one source into a configured Second Brain wiki. Use for requests to ingest,
+  process, or add a named raw file. Supports regular Karpathy-style ingest and explicit deep
+  ingest. Works directly without a platform-specific subagent.
 metadata:
-  version: "0.1.0"
+  version: "0.3.0"
 ---
 
-# Ingest a Single Source
+# Ingest One Source
 
-Add exactly one raw source file into the wiki. This skill is a thin wrapper: it validates,
-delegates the real work to the `wiki-ingest` subagent, then records the result.
+Integrate exactly one immutable raw source into the wiki. Never edit, rename, move, or delete a
+raw source. If multiple files are supplied, process only the first and leave the rest for later
+invocations.
 
-## Hard rule: one file only
+## Resolve context and mode
 
-If the user or caller provides more than one filename, process **only the first one** and tell
-them explicitly that the rest need separate, subsequent ingest calls — never combine multiple
-raw sources into a single ingestion pass, and never loop over a list of files within this skill.
-This mirrors the immutability of `raw/`: sources go in one at a time, deliberately, so each one
-gets full attention and any contradictions it introduces are caught individually.
+1. Confirm `.secondbrain/config.json` exists; otherwise direct the user to `init`.
+2. Read the configured raw and wiki folders and `default_ingest_mode`. Missing mode defaults to
+   `regular`. An explicit regular/deep request overrides it for this run.
+3. Check `.secondbrain/ingested.json`. Skip an unchanged path-and-hash match unless the user
+   explicitly requests re-ingestion.
+4. Read the project's `AGENTS.md` or `CLAUDE.md` schema. If both exist, they should contain the
+   same generated schema; report a material conflict rather than guessing.
 
-## Steps
+## Read only useful context
 
-1. Confirm `.secondbrain/config.json` exists (if not, direct the user to `init` and stop).
-2. Resolve the single target file path against `raw_folder` from the config.
-3. Check `.secondbrain/ingested.json` — if this exact file (by path + content hash) was already
-   ingested, tell the user and stop; do not re-ingest unless they explicitly ask for a re-ingest
-   of an updated version.
-4. Read `CLAUDE.md` for the current schema/conventions.
-5. Invoke the `wiki-ingest` subagent (via the Task tool) with: the single file path, the wiki
-   folder path, and the schema contents. Do not read or summarize the source file yourself first
-   — let the subagent do the actual reading and drafting so the work is isolated and auditable.
-6. When the subagent returns, review its summary of pages created/updated and any findings it
-   wrote to `wiki/review/pending/`.
-7. Update `.secondbrain/ingested.json` with `{filename, path, hash, ingested_at}` for this file.
-8. Append one entry to `wiki/log.md` in the standard format:
-   `## [YYYY-MM-DD] ingest | <source title>` followed by a one/two-line summary of what changed
-   and how many review findings were filed.
-9. Report back to the user: pages created, pages updated, and any findings now sitting in
-   `wiki/review/pending/` awaiting their attention (name each file, not just "there were
-   contradictions" — the user should be able to go straight to the review skill or open the file).
-   Mention the `review` skill as the way to see and resolve them.
+1. Read the source in full. Stop if its format cannot be read reliably.
+2. Search `wiki/learnings/` for entries relevant to the source topic; do not load every learning
+   without a reason.
+3. Find related active pages before drafting. At up to 100 content pages, use `wiki/index.md`.
+   Above 100, locate the plugin root as the directory containing `.codex-plugin` or
+   `.claude-plugin`, then run `scripts/bm25_search.py <wiki_dir> "<source terms>" --top-k 10`.
+
+## Integrate
+
+- **Regular mode:** follow Karpathy's baseline. Create one source summary, update or create every
+  genuinely relevant entity/concept/topic page, maintain useful wikilinks, update the index, and
+  append to the log. There is no arbitrary page cap; incidental mentions do not justify pages.
+- **Deep mode:** perform the regular work, then inspect the wider related graph for second-order
+  connections and additional synthesis. This is substantially more token-intensive.
+- Every created or updated page must have a genuine connection to another page. File an `orphan`
+  review item instead of forcing a weak link.
+- If the source conflicts with an existing claim, leave that claim unchanged and create one
+  durable `contradiction` file in `wiki/review/pending/` with the pages, claims, source, date, and
+  suggested human decision.
+
+## Persist and report
+
+1. Update `wiki/index.md` for created and changed pages.
+2. Append `## [YYYY-MM-DD] ingest | <source title>` to `wiki/log.md` with a compact summary.
+3. Record `{filename, path, hash, ingested_at}` in `.secondbrain/ingested.json` only after wiki
+   writes succeed.
+4. Report the mode, pages created, pages updated, and every pending-review filename.

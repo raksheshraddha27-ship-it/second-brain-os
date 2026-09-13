@@ -1,8 +1,7 @@
-# CLAUDE.md Template
+# Cross-platform wiki schema template
 
-Fill in every `<placeholder>` using the user's Step 2 answers, then write the result to
-`CLAUDE.md` at the project root. Remove this instructions block from the final output — only the
-content below the `---` separator is written to the file.
+Fill in every `<placeholder>` using the setup answers, then write the same result to `AGENTS.md`
+and `CLAUDE.md` at the project root. Remove this instructions block from both outputs.
 
 ---
 
@@ -17,12 +16,12 @@ rules to follow. Read this file before ingesting, querying, or linting.
 - **`<raw_folder>/`** — immutable raw sources (<source_types>). Never edit or delete files here.
   Only read from this folder.
 - **`wiki/`** — the LLM-owned, LLM-maintained knowledge base. All wiki content lives here.
-- **`wiki/archives/`** — pages that crossed the staleness threshold. Content is never deleted
-  from the wiki, only moved here (see Staleness and lint below).
+- **`wiki/archives/`** — pages approved for archiving after crossing the staleness threshold.
+  Content is never deleted from the wiki, only moved here (see Staleness and lint below).
 - **`wiki/review/`** — the durable human-review queue (see "Human review queue" below). Anything
   ingest or lint can't resolve on its own lives here as a file until a human acts on it.
-- **This file (`CLAUDE.md`)** — the schema. Update it if the user asks you to change a
-  convention, but never let ingestion/query/lint work silently redefine it.
+- **`AGENTS.md` and `CLAUDE.md`** — identical platform adapters for this schema. Keep them
+  synchronized when conventions change; never let ingestion/query/lint silently redefine them.
 
 ## Page types
 
@@ -75,8 +74,7 @@ explanation the human gave. **Before drafting or updating any wiki page, first c
 
 ## Human review queue (`wiki/review/`)
 
-Every finding that requires human judgment — not just chat output, an actual file — so it
-survives headless/cron runs where nobody is reading the terminal in real time:
+Every finding that requires human judgment becomes an actual file rather than transient chat:
 
 - `wiki/review/pending/` — one markdown file per open finding.
 - `wiki/review/resolved/` — where files move once a human resolves them (via the `review` skill).
@@ -85,7 +83,7 @@ File naming: `<type>-<slug>-<YYYY-MM-DD>.md`. Frontmatter:
 
 ```yaml
 ---
-type: contradiction | orphan | missing-page | missing-crosslink
+type: contradiction | orphan | missing-page | missing-crosslink | metadata | duplicate-title | stale
 status: pending
 flagged_by: ingest | lint
 flagged_date: <ISO date>
@@ -113,42 +111,49 @@ future drafting should respect — a corresponding entry gets written to `wiki/l
    untouched until a human resolves it via the `review` skill.
 4. **Consult learnings first.** See `wiki/learnings/` above.
 
+5. **Ingest modes.** The configured default is **`<default_ingest_mode>`**. Regular ingest
+   follows Karpathy's baseline workflow:
+   create a source-summary page, update the index and log, and update or create every genuinely
+   relevant entity/concept/topic page with useful cross-links. A source may touch 10-15 pages;
+   there is no page-count cap. Deep ingest is opt-in only and adds an exhaustive pass over the
+   wider graph for second-order connections and additional synthesis. Trade-off: **regular uses
+   fewer tokens; deep can produce a denser, more connected wiki at substantially higher token
+   cost.** An explicit mode request overrides the configured default for that ingest only.
+
 ## Staleness and lint
+
+<lint_enabled_clause>
 
 <staleness_clause>
 
-<lint_cadence_clause>
+Lint runs deterministic local checks for broken links, orphan pages, metadata errors, duplicate
+titles, and stale candidates. It then uses `.secondbrain/lint-state.json` to compare only new or
+changed pages with a small set of related pages for contradictions and missing cross-references.
+The initial bootstrap is resumable and processes a bounded batch per approved run. Every finding
+becomes a file in `wiki/review/pending/`; lint never resolves findings automatically.
 
-Lint checks for: contradictions between pages, orphan pages, stale nodes (per the rule above),
-concepts mentioned but missing their own page, and missing cross-references. Lint only proposes
-and flags for everything **except** staleness — findings for contradictions, orphans, and missing
-links/pages each become a file in `wiki/review/pending/` (see "Human review queue" above) and are
-never auto-resolved.
+**Stale pages are reviewed, never automatically archived.** Crossing the configured threshold
+creates a `stale` review item. A page moves to `wiki/archives/` only after explicit human
+confirmation; its frontmatter and `index.md` row are then updated, and nothing is deleted.
 
-**Stale pages are archived, never deleted.** Once a page crosses the staleness threshold, it is
-moved to `wiki/archives/` (frontmatter gets `archived: true` / `archived_date`), its `index.md`
-row moves from Active to Archived, and the move is logged. This is the one lint action that
-happens automatically rather than sitting in the review queue, because it's a mechanical
-disposition based on a threshold you defined, not a judgment call — and because nothing is lost,
-archived pages remain fully readable and queryable, just out of the active set.
+When automatic lint is disabled, sync must not run lint silently. It may offer lint after
+ingestion, but requires explicit user confirmation.
 
 ## Search at scale
 
 At small scale (≤100 pages), `wiki/index.md` is sufficient for finding candidate pages during
-query, ingest, and lint — this is the default per Karpathy's pattern. **Once the wiki has more
-than 100 active pages**, index-skimming stops scaling well. From that point on, agents use the
-bundled BM25 search script instead:
+query and ingest. **Once the wiki has more than 100 active pages**, use the bundled BM25 search
+script. Resolve `<plugin-root>` as the directory containing `.codex-plugin` or `.claude-plugin`:
 
 ```
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/bm25_search.py <wiki_dir> "<query>" --top-k 10
+python3 <plugin-root>/scripts/bm25_search.py <wiki_dir> "<query>" --top-k 10
 ```
 
 This is a dependency-free, on-device Okapi BM25 implementation (Python standard library only —
 no vector DB, no network calls) that ranks wiki pages by relevance to a query and returns the top
 matches with snippets. It excludes `index.md`, `log.md`, and (implicitly, since they're a
 separate concern) does not need to touch `wiki/archives/` for normal query/ingest search. This
-threshold is fixed at 100 pages across ingest, query, and lint — not separately configurable per
-operation.
+threshold is fixed at 100 pages for ingest and query. Lint uses its own incremental local planner.
 
 ## Scale expectations
 

@@ -4,7 +4,7 @@ Second Brain OS - lightweight BM25 search over the wiki.
 
 Per Andrej Karpathy's LLM Wiki gist: "at small scale the index file is
 enough ... as the wiki grows you want proper search." This script is the
-"proper search" - used by the wiki-query, wiki-lint, and wiki-ingest agents
+"proper search" - used by the shared query and ingest skills
 once a wiki grows beyond ~100 pages, instead of relying solely on manually
 reading wiki/index.md and following links.
 

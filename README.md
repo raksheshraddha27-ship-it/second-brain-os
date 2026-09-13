@@ -1,101 +1,139 @@
 # Second Brain OS
 
-A Claude Code plugin that turns any folder of raw sources (meeting recordings, PPTs, notes,
-articles, PDFs) into a self-maintaining, LLM-curated knowledge wiki - implementing
+A Codex and Claude Code plugin that turns raw notes, transcripts, articles, PDFs, and other
+sources into a maintained, interlinked Markdown wiki. It implements
 [Andrej Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f):
-raw sources are compiled once into a persistent, interlinked markdown wiki, then kept current,
-instead of being re-read from scratch on every question.
+knowledge is compiled into a persistent wiki instead of being rediscovered from raw documents
+for every question.
 
-## How it works
+## Core model
 
-Three layers, per Karpathy's pattern:
+- **Raw sources** are immutable and only read by the agent.
+- **`wiki/`** is maintained by the agent and contains pages, an index, a log, learnings,
+  archives, and a durable review queue.
+- **`AGENTS.md` and `CLAUDE.md`** contain the same generated schema so the wiki behaves
+  consistently in Codex and Claude Code.
 
-- **`raw/`** (name is whatever you choose) - your immutable source documents. Read-only, enforced
-  automatically by a hook.
-- **`wiki/`** - the LLM-owned, interlinked markdown knowledge base (`index.md` catalog,
-  `log.md` history, page-type folders, `learnings/`, `archives/`, `review/`).
-- **`CLAUDE.md`** - the schema file generated during setup, governing conventions and rules.
+Ingestion processes one source per invocation. Contradictions are never silently resolved: each
+one becomes a file in `wiki/review/pending/` until a human decides what is correct. Human
+resolutions become durable learnings for future ingests.
 
-On top of Karpathy's bare pattern, this plugin adds opinionated hygiene rules: every new/updated
-page must connect to the existing graph, contradictions are held for human review instead of
-being auto-merged, ingestion processes exactly one raw file at a time (never a batch), human
-edits to wiki pages are captured as `wiki/learnings/` entries that future drafting must consult,
-and stale pages are archived to `wiki/archives/` rather than ever being deleted. Once the wiki
-grows past ~100 pages, lookups switch from scanning `index.md` to a bundled dependency-free BM25
-search script (`scripts/bm25_search.py`).
+## End-to-end flow
 
-Anything `ingest` or `lint` can't resolve on its own - contradictions, orphans, missing pages,
-missing links - becomes a durable file in `wiki/review/pending/`, not just chat output. That way a
-finding from a headless/cron run doesn't vanish the moment the terminal closes; it's a file you
-can come back to, see with the `review` skill, and resolve whenever you're ready. Resolving one
-also files a `wiki/learnings/` entry, so the decision sticks for future ingests.
+```mermaid
+flowchart TD
+    start([Start]) --> configured{Already configured?}
+    configured -->|No| setup[Choose folders, schema, ingest mode, and lint preference]
+    setup --> initialize[Create wiki, cross-platform schema, and state]
+    initialize --> ready([Ready])
+    configured -->|Yes| ready
+
+    ready --> operation{Requested operation?}
+
+    operation -->|Sync or ingest| discover[Find unprocessed raw files]
+    discover --> sourceAvailable{New source available?}
+    sourceAvailable -->|No| summary[Report status]
+    sourceAvailable -->|Yes| selectSource[Select one oldest source]
+    selectSource --> ingestMode{Configured or explicit mode?}
+    ingestMode -->|Regular| regular["Karpathy baseline: potentially high token use"]
+    ingestMode -->|Deep| deep["Wider graph synthesis: very high token use"]
+    regular --> integrate[Create summary and update relevant pages]
+    deep --> integrate
+    integrate --> persist[Update index, log, hashes, and review findings]
+    persist --> lintChoice{"Run optional lint?"}
+    lintChoice -->|Enabled or approved| lint[Run one resumable lint batch]
+    lintChoice -->|No| summary
+    lint --> findings{Findings detected?}
+    findings -->|Yes| pending[Write durable pending review files]
+    findings -->|No| lintLog[Log lint result]
+    pending --> lintLog
+    lintLog --> summary
+
+    operation -->|Query| search[Search index or BM25]
+    search --> answer[Return a cited wiki answer]
+    answer --> saveAnswer{Save useful synthesis?}
+    saveAnswer -->|Yes| save[Create page and update index and log]
+    saveAnswer -->|No| complete([Complete])
+    save --> complete
+
+    operation -->|Review| review[Show pending findings]
+    review --> resolved{Human resolution supplied?}
+    resolved -->|No| complete
+    resolved -->|Yes| apply[Update wiki and resolve finding]
+    apply --> learning[Record learning and log]
+    learning --> complete
+    summary --> complete
+```
+
+There is no scheduler or background sync. Every sync starts with an explicit user request.
+
+## Token-usage warnings
+
+- **Deep ingest — very high:** deliberately searches the wider graph for second-order
+  connections and additional synthesis.
+- **Regular ingest — moderate to high:** follows Karpathy's baseline without a page cap; a long
+  source may genuinely update 10-15 pages.
+- **Bootstrap lint — controlled but potentially high in total:** structural checks consume no
+  model tokens, while semantic checks run in resumable 15-page batches against up to three
+  related pages.
+- **Incremental lint — usually low to moderate:** after bootstrap, only changed pages and their
+  strongest candidate matches receive semantic review.
+- **Query — usually low to moderate:** reads only search results and the pages needed to answer.
 
 ## Components
 
 | Component | Type | Purpose |
 |---|---|---|
-| `second-brain` | Skill (orchestrator) | Single entry point for manual, cron, and SessionStart-triggered runs. Reads state and dispatches to the skills below. |
-| `init` | Skill | One-time setup: asks about your raw folder, topic, sources, page types, staleness definition; creates `wiki/`, `CLAUDE.md`, and config. |
-| `ingest` | Skill | Adds exactly one raw file to the wiki via the `wiki-ingest` subagent. |
-| `query` | Skill | Answers questions from the wiki via the `wiki-query` subagent; can file answers back as new pages. |
-| `lint` | Skill | Periodic health audit via the `wiki-lint` subagent: contradictions, orphans, staleness, missing links. |
-| `schedule-setup` | Skill | Installs an OS-level cron/launchd/Task Scheduler entry for automatic syncing. |
-| `review` | Skill | Lists and resolves items in `wiki/review/pending/`; resolving one files a learning. |
-| `wiki-ingest` | Subagent | Does the actual multi-page reading/drafting/updating during ingest; files review findings. |
-| `wiki-lint` | Subagent | Runs the audit, files review findings for anything needing judgment, and archives stale pages (the one automatic action it's allowed to take). |
-| `wiki-query` | Subagent | Reads the wiki and synthesizes cited answers. |
-| `hooks.json` | Hooks | `PreToolUse` blocks edits inside `raw/` (immutability); `SessionStart` optionally checks for a missed scheduled sync and/or a pending review backlog. |
-| `scripts/bm25_search.py` | Script | Dependency-free Okapi BM25 search over `wiki/*.md`, used by the query/ingest/lint subagents once the wiki exceeds ~100 pages. |
+| `second-brain` | Skill | Routes setup, sync, ingest, query, lint, and review requests. |
+| `init` | Skill | Creates the wiki, dual-platform schema, configuration, and state. |
+| `ingest` | Skill | Directly integrates one source using regular or deep mode. |
+| `query` | Skill | Searches the wiki and returns cited answers. |
+| `lint` | Skill | Runs deterministic checks and bounded incremental semantic review. |
+| `review` | Skill | Lists and resolves durable findings and records human learnings. |
+| `scripts/bm25_search.py` | Script | Dependency-free relevance search for larger wikis. |
+| `scripts/wiki_lint.py` | Script | Deterministic checks and resumable incremental lint state. |
+| `hooks/hooks.json` | Claude Code hook | Prevents writes to the configured raw-source folder. |
 
-## Setup
+## Setup and usage
 
-1. Install the plugin (see below), then in a Claude Code session run: *"set up a second brain"*
-   to trigger the `init` skill. Answer its questions - raw folder path/name, topic, source types,
-   expected scale, page types, staleness definition (optional), lint cadence (optional).
-2. Optionally run *"set up automatic ingestion"* to trigger `schedule-setup`. Note: Claude Code
-   plugins have no built-in scheduler - this installs a real OS-level cron/launchd/Task Scheduler
-   job that calls `claude -p` headlessly. It depends on the machine being on at the scheduled
-   time; a missed run is picked up on the next one (or via the optional SessionStart catch-up
-   hook, which you can opt into during this step).
-3. Drop files into your raw folder and either wait for the schedule, or say *"sync my second
-   brain"* / *"ingest raw/\<file\>"* manually.
+After installing the plugin, open the project that will contain the source folder and say:
 
-Each sync processes **at most one new file** - by design, not a limitation. A backlog drains
-gradually across runs so every source gets full attention and any contradiction it introduces is
-caught individually.
+> Set up a second brain.
 
-## Usage
+Setup asks for the raw folder, topic, source types, scale, page types, default ingest mode, lint
+preference, and optional staleness threshold. It creates both `AGENTS.md` and `CLAUDE.md`.
 
-- *"What does my second brain know about X?"* -> `query`
-- *"Ingest raw/meeting-2026-08-05.txt"* -> `ingest`
-- *"Run a health check on my wiki"* -> `lint`
-- *"What needs my review?"* / *"resolve the contradiction between X and Y"* -> `review`
-- *"Sync my second brain"* / scheduled cron run -> `second-brain` orchestrator
-- Open the `wiki/` folder in [Obsidian](https://obsidian.md) for the graph view.
+Useful requests:
 
-## Installing this plugin
+- `Sync my second brain` — process the next unprocessed source.
+- `Regular ingest raw/meeting.md` — use Karpathy's baseline for one source.
+- `Deep ingest raw/research-report.pdf` — add a wider graph-enrichment pass.
+- `What does my second brain know about X?` — query the compiled wiki.
+- `Run lint on my second brain` — run or resume one lint batch.
+- `What needs my review?` — list durable unresolved findings.
 
-This repo follows the standard Claude Code plugin layout (`.claude-plugin/plugin.json` +
-`skills/` + `agents/` + `hooks/`). Add it as a plugin source and install it, e.g.:
+## Plugin packaging
 
-```
-/plugin marketplace add <this-repo-url>
-/plugin install second-brain-os
-```
+The same repository contains both manifests:
 
-(Exact commands may vary by Claude Code version - run `claude plugin --help` or see the
-[Claude Code plugin docs](https://docs.claude.com) if these don't match your CLI.)
+- `.codex-plugin/plugin.json` for Codex.
+- `.claude-plugin/plugin.json` for Claude Code.
+
+Both platforms load the shared `skills/` and `scripts/` directories. Claude Code additionally
+loads its raw-folder protection hook. Codex enforces raw-source immutability through the shared
+skill and generated `AGENTS.md` instructions.
+
+For Claude Code, add the repository as a plugin source and install `second-brain-os` using the
+plugin UI or CLI available in your Claude Code version. For Codex, install the repository through
+the Codex plugin UI or include it in a Codex marketplace; the native manifest requires no source
+conversion.
 
 ## Requirements
 
-- Claude Code CLI, with `claude` available on `PATH` if you want scheduled/headless syncing.
-- `python3` available on the machine for the optional SessionStart catch-up check (the hook
-  silently no-ops if missing).
-- [Obsidian](https://obsidian.md) (optional) for visualizing the wiki as a graph.
+- Codex or Claude Code.
+- Python 3 for BM25 search and low-token lint.
+- Obsidian is optional for browsing the wiki graph.
 
 ## Credit
 
-Pattern: [Andrej Karpathy's LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
-This plugin implements the pattern with an opinionated hygiene/orchestration layer on top; the
-gist itself deliberately leaves page taxonomy, linking syntax, and schema conventions
-unspecified for the implementer to decide.
+Based on [Andrej Karpathy's LLM Wiki idea](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f).
